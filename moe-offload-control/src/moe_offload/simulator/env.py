@@ -129,10 +129,18 @@ class SimulatorEnv:
         pinned = self._state.pinned_experts
         safe_evict = [eid for eid in decision.evict_experts if eid not in pinned]
         self._memory.release(safe_evict)
-        self._memory.allocate(
-            [eid for eid in decision.fetch_experts
-             if not self._memory.is_resident(eid)]
-        )
+        to_fetch = [
+            eid
+            for eid in decision.fetch_experts
+            if not self._memory.is_resident(eid)
+        ]
+        if to_fetch:
+            # Respect capacity limits when applying controller-directed fetches.
+            available_slots = self._memory.capacity - self._memory.current_usage()
+            if available_slots > 0:
+                alloc = to_fetch[:available_slots]
+                if alloc:
+                    self._memory.allocate(alloc)
 
         # Demand-fetch missed active experts (so they become resident for
         # the next step even though they caused a stall this step)
@@ -142,21 +150,25 @@ class SimulatorEnv:
             if not self._memory.is_resident(eid)
         ]
         if demand_fetch:
-            # Need space — evict oldest non-pinned non-active if needed
+            # Need space — evict oldest non-pinned non-active if needed.
+            # This block is intentionally conservative and may leave some
+            # active experts non-resident if capacity is fully consumed by
+            # pinned or currently-active experts.
             while not self._memory.can_fit(len(demand_fetch)):
                 evictable = (
                     self._memory.resident_set() - pinned - active
                 )
                 if not evictable:
-                    break  # cannot make room; will be a capacity error
+                    break  # cannot make room beyond what is already available
                 victim = min(evictable)  # deterministic: pick lowest ID
                 self._memory.release([victim])
-            try:
-                self._memory.allocate(demand_fetch)
-            except ValueError as exc:
-                raise RuntimeError(
-                    "Demand fetch failed after attempting to free capacity"
-                ) from exc
+
+            # Allocate only as many demand-fetched experts as can fit.
+            available_slots = self._memory.capacity - self._memory.current_usage()
+            if available_slots > 0:
+                to_allocate = demand_fetch[:available_slots]
+                if to_allocate:
+                    self._memory.allocate(to_allocate)
 
         # --- Build new state ---
         self._step_cursor += 1

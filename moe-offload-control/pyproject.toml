@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "moe-offload-control"
+version = "0.1.0"
+description = "Trace-driven simulator for MoE expert offloading control"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["src"]

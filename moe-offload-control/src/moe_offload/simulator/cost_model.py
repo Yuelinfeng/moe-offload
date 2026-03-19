@@ -1,13 +1,22 @@
-"""Cost model — computes per-step metrics from decisions and ground truth.
+"""Cost model — computes per-step metrics from effective decisions and ground truth.
 
 Implements the cost formula::
 
     service_cost = stall_latency
-                 + alpha_transfer   * transfer_cost
+                 + alpha_transfer * transfer_cost
                  + alpha_misprefetch * misprefetch_count
-                 + alpha_reload     * reload_count
+                 + alpha_reload * reload_count
 
 Extreme-minimal implementation: no OO hierarchy, no plugin system.
+
+Important
+---------
+This module assumes the input ``decision`` has already been normalized by the
+environment into an *effective* decision, meaning:
+
+- evictions only include currently resident, non-pinned experts
+- fetches only include experts that are not resident after effective eviction
+- illegal controller actions have already been rejected by the environment
 """
 
 from __future__ import annotations
@@ -32,7 +41,7 @@ class CostModel:
         Number of future steps to look ahead when judging misprefetch.
     reload_window : int
         Number of future steps to look ahead when judging reload.
-    bandwidth_model : BandwidthModel
+    bandwidth_model : BandwidthModel | None
         Bandwidth model used to convert fetch count into transfer cost
         and stall latency.
     """
@@ -65,9 +74,9 @@ class CostModel:
         Parameters
         ----------
         decision : ControllerDecision
-            The controller's action for this step.
+            The *effective* controller action for this step.
         state : SimulatorState
-            State *before* applying the decision.
+            State *before* applying the effective decision.
         ground_truth : TraceStep
             The actual routing outcome for this step.
         future_steps : list[TraceStep]
@@ -76,27 +85,25 @@ class CostModel:
         """
         active = set(ground_truth.active_experts)
 
-        # --- Determine post-decision resident set ---
+        # Post-decision resident set after effective eviction/fetch
         post_residents = set(state.resident_experts)
         post_residents -= set(decision.evict_experts)
         post_residents |= set(decision.fetch_experts)
 
-        # --- Cache misses: active experts not in post-decision resident set ---
+        # Cache misses: active experts not covered by the effective decision
         misses = active - post_residents
         cache_miss_count = len(misses)
 
-        # --- Transfer cost and stall ---
-        # Stall comes from two sources:
-        #   1. fetching the explicitly requested experts (bandwidth overflow)
-        #   2. demand-fetching the missed experts on top of that
+        # Transfer cost and stall:
+        #   total_fetch = explicit effective fetches + miss-triggered demand fetches
         total_fetch = len(decision.fetch_experts) + cache_miss_count
         transfer_cost, bw_stall = self._bw.compute_transfer(total_fetch)
 
-        # Each cache miss also incurs a per-miss stall (demand fetch latency)
-        miss_stall = float(cache_miss_count)  # 1.0 per miss
+        # Each cache miss adds a simple per-miss stall term
+        miss_stall = float(cache_miss_count)
         stall_latency = bw_stall + miss_stall
 
-        # --- Misprefetch: fetched but unused in near future ---
+        # Misprefetch: effective fetched experts unused now and unused in a short future window
         future_active = self._collect_future_active(
             future_steps, self.misprefetch_window
         )
@@ -105,7 +112,8 @@ class CostModel:
             if eid not in active and eid not in future_active:
                 misprefetch_count += 1
 
-        # --- Reload: evicted but needed in near future ---
+        # Reload: effective evictions whose experts are needed again in the near future
+        # NOTE: do not count "active this same step" here; that is already reflected in miss/stall.
         future_active_reload = self._collect_future_active(
             future_steps, self.reload_window
         )
@@ -114,7 +122,6 @@ class CostModel:
             if eid in future_active_reload:
                 reload_count += 1
 
-        # --- Composite service cost ---
         service_cost = (
             stall_latency
             + self.alpha_transfer * transfer_cost

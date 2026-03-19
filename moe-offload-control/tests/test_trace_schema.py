@@ -14,7 +14,11 @@ from moe_offload.traces.schema import (
 # ---------------------------------------------------------------------------
 
 
-def _make_step(step_idx: int, layer_id: int = 0, experts: list[int] | None = None) -> TraceStep:
+def _make_step(
+    step_idx: int,
+    layer_id: int = 0,
+    experts: list[int] | None = None,
+) -> TraceStep:
     """Shorthand for creating a TraceStep."""
     return TraceStep(
         step_idx=step_idx,
@@ -30,6 +34,7 @@ def _make_episode(
     num_experts: int = 4,
     num_layers: int = 1,
 ) -> TraceEpisode:
+    """Shorthand for creating a TraceEpisode for tests."""
     return TraceEpisode(
         steps=steps,
         num_experts=num_experts,
@@ -75,6 +80,16 @@ class TestInvalidEpisode:
     def test_empty_episode(self):
         ep = _make_episode([])
         with pytest.raises(ValueError, match="at least 1 step"):
+            validate_episode(ep)
+
+    def test_num_experts_must_be_positive(self):
+        ep = _make_episode([_make_step(0)], num_experts=0)
+        with pytest.raises(ValueError, match="num_experts must be positive"):
+            validate_episode(ep)
+
+    def test_num_layers_must_be_positive(self):
+        ep = _make_episode([_make_step(0)], num_layers=0)
+        with pytest.raises(ValueError, match="num_layers must be positive"):
             validate_episode(ep)
 
     def test_non_monotonic_step_idx(self):

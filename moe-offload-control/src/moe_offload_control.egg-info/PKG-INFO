@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: moe-offload-control
+Version: 0.1.0
+Summary: Trace-driven simulator for MoE expert offloading control
+Requires-Python: >=3.10
